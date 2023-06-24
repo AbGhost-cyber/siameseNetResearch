@@ -8,3 +8,4 @@ for i in range(100):
 
 if __name__ == '__main__':
     print(len(lists))
+# root = "/Users/mac/research books/signature_research/data/faces/testing/"
