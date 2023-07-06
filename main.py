@@ -212,7 +212,7 @@ print(f"Using device: {device}")
 
 net = SignetY().to(device)
 # Load the training dataset
-train_dataloader = DataLoader(siamese_dataset, shuffle=True, batch_size=32)
+train_dataloader = DataLoader(siamese_dataset, shuffle=True, batch_size=64)
 test_dataloader = DataLoader(siamese_dataset_test, shuffle=True, batch_size=1)
 print("dataset size:", len(siamese_dataset))
 print("test dataset size", siamese_dataset_test[0])
