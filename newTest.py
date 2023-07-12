@@ -1,13 +1,9 @@
-from math import floor
-
-import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import random
 from PIL import Image
 import PIL.ImageOps
-from torchvision import models
-from torch.nn import init
+
 import torchvision
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
@@ -18,25 +14,6 @@ from torch.autograd import Variable
 import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
-
-torch.manual_seed(1)
-
-
-def accuracy(distances, y, step=0.01):
-    min_threshold_d = min(distances)
-    max_threshold_d = max(distances)
-    max_acc = 0
-    same_id = (y == 1)
-
-    for threshold_d in torch.arange(min_threshold_d, max_threshold_d + step, step):
-        true_positive = (distances <= threshold_d) & (same_id)
-        true_positive_rate = true_positive.sum().float() / same_id.sum().float()
-        true_negative = (distances > threshold_d) & (~same_id)
-        true_negative_rate = true_negative.sum().float() / (~same_id).sum().float()
-
-        acc = 0.5 * (true_negative_rate + true_positive_rate)
-        max_acc = max(max_acc, acc)
-    return max_acc
 
 
 # Showing images
@@ -97,47 +74,117 @@ class SiameseNetworkDataset(Dataset):
         return len(self.imageFolderDataset.imgs)
 
 
-# Load the training and testing dataset
+# Load the training dataset
 folder_dataset = datasets.ImageFolder(root="/Users/mac/research books/signature_research/data/faces/training/")
-folder_dataset_test = datasets.ImageFolder(root="/Users/mac/research books/signature_research/data/faces/testing/")
 
 # Resize the images and transform to tensors
-transformation = transforms.Compose([transforms.Resize((120, 120)),
-                                     transforms.RandomHorizontalFlip(),
-                                     transforms.RandomVerticalFlip(),
-                                     transforms.RandomRotation(10),
-                                     transforms.RandomRotation(25),
-                                     transforms.RandomCrop((100, 100)),
-                                     transforms.ToTensor()
-                                     ])
-
+transformation_train = transforms.Compose([transforms.Resize((224, 224)),
+                                           transforms.RandomHorizontalFlip(),
+                                           transforms.RandomVerticalFlip(),
+                                           transforms.RandomRotation(degrees=30),
+                                           transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4,
+                                                                  hue=0.1),
+                                           transforms.ToTensor(),
+                                           transforms.Normalize(mean=[0.2062], std=[0.1148]),
+                                           ])
+transformation_test = transforms.Compose([transforms.Resize((224, 224)),
+                                          transforms.ToTensor()
+                                          ])
 # Initialize the network
 siamese_dataset = SiameseNetworkDataset(imageFolderDataset=folder_dataset,
-                                        transform=transformation)
-
-siamese_dataset_test = SiameseNetworkDataset(imageFolderDataset=folder_dataset_test,
-                                             transform=transformation)
+                                        transform=transformation_train)
 
 # Create a simple dataloader just for simple visualization
-vis_dataloader = DataLoader(siamese_dataset,
-                            shuffle=True,
-                            batch_size=8)
+vis_dataloader = DataLoader(siamese_dataset, shuffle=True, batch_size=8)
 
 # Extract one batch
 example_batch = next(iter(vis_dataloader))
 
-# Example batch is a list containing 2x8 images, indexes 0 and 1, and also the label
+# Example batch is a list containing 2x8 images, indexes 0 and 1, an also the label
 # If the label is 1, it means that it is not the same person, label is 0, same person in both images
 concatenated = torch.cat((example_batch[0], example_batch[1]), 0)
 
 
+# loader = torch.utils.data.DataLoader(siamese_dataset, batch_size=1)
+# mean = torch.zeros(1)
+# std = torch.zeros(1)
+#
+# # Calculate the mean and standard deviation
+# for data1, data2, _ in loader:
+#     mean += torch.cat((data1, data2)).mean(dim=(0, 2, 3))
+#     std += torch.cat((data1, data2)).std(dim=(0, 2, 3))
+#
+# mean /= len(siamese_dataset) * 2
+# std /= len(siamese_dataset) * 2
+# print("mean", mean)
+# print("std", std)
+# mean: 0.2062
+# std: 0.1148
+
 # imshow(torchvision.utils.make_grid(concatenated))
 # print(example_batch[2].numpy().reshape(-1))
+
+# create the Siamese Neural Network
+class SiameseNetwork(nn.Module):
+
+    def __init__(self):
+        super(SiameseNetwork, self).__init__()
+
+        # Setting up the Sequential of CNN Layers
+        self.cnn1 = nn.Sequential(
+            nn.Conv2d(1, 96, kernel_size=11, stride=4),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(3, stride=2),
+            nn.Dropout(p=0.3),
+
+            nn.Conv2d(96, 256, kernel_size=5, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
+
+            nn.Conv2d(256, 384, kernel_size=3, stride=1),
+            nn.MaxPool2d(2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+
+            nn.Conv2d(384, 512, kernel_size=3, stride=1),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+        )
+
+        # Setting up the Fully Connected Layers
+        self.fc1 = nn.Sequential(
+            nn.Linear(512 * 2 * 2, 1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+
+            nn.Linear(1024, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+
+            nn.Linear(256, 2)
+        )
+
+    def forward_once(self, x):
+        # This function will be called for both images
+        # Its output is used to determine the similarity
+        output = self.cnn1(x)
+        output = output.view(output.size()[0], -1)
+        output = self.fc1(output)
+        return output
+
+    def forward(self, input1, input2):
+        # In this function we pass in both images and obtain both vectors
+        # which are returned
+        output1 = self.forward_once(input1)
+        output2 = self.forward_once(input2)
+
+        return output1, output2
 
 
 # Define the Contrastive Loss Function
 class ContrastiveLoss(torch.nn.Module):
-    def __init__(self, margin=3):
+    def __init__(self, margin=2.0):
         super(ContrastiveLoss, self).__init__()
         self.margin = margin
 
@@ -151,165 +198,92 @@ class ContrastiveLoss(torch.nn.Module):
         return loss_contrastive
 
 
-class CosineLoss(torch.nn.Module):
-    def __init__(self, margin=0.5):
-        super(CosineLoss, self).__init__()
-        self.margin = margin
-
-    def forward(self, output1, output2, label):
-        cosine_distance = F.cosine_similarity(output1, output2, dim=1)
-        loss_cosine = torch.mean((1 - label) * torch.pow(cosine_distance, 2) +
-                                 label * torch.pow(torch.clamp(self.margin - cosine_distance, min=0.0), 2))
-        return loss_cosine
-
-
-# Setup device-agnostic code
-if torch.cuda.is_available():
-    device = "cuda"  # NVIDIA GPU
-elif torch.backends.mps.is_available():
-    device = "mps"  # Apple GPU
-else:
-    device = "cpu"  # Defaults to CPU if NVIDIA GPU/Apple GPU aren't available
-
-if __name__ == '__main__':
-    print()
-
-
-class TestSign(nn.Module):
-
-    def __init__(self):
-        super(TestSign, self).__init__()
-        self.cnn1 = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=32, kernel_size=5, stride=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            #
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            nn.Conv2d(in_channels=128, out_channels=384, kernel_size=2, stride=1),
-            nn.ReLU(),
-        )
-
-        self.fc1 = nn.Sequential(
-            nn.Linear(in_features=384 * 9 * 9, out_features=1024),
-            nn.ReLU(),
-
-            nn.Linear(in_features=1024, out_features=512),
-            nn.ReLU(),
-
-            nn.Linear(in_features=512, out_features=128)
-        )
-
-    def forward_once(self, x):
-        output = self.cnn1(x)
-        output = output.view(output.size(0), -1)
-        output = self.fc1(output)
-        return output
-
-    def forward(self, input1, input2):
-        output1 = self.forward_once(input1)
-        output2 = self.forward_once(input2)
-
-        return output1, output2
-
-
-print(f"Using device: {device}")
-
-net = TestSign().to(device)
-# Define your margin schedule
-min_margin = 3
-max_margin = 1
-num_epochs = 50
-
 # Load the training dataset
 train_dataloader = DataLoader(siamese_dataset, shuffle=True, batch_size=64)
-print(len(train_dataloader))
-optimizer = optim.Adam(net.parameters(), lr=0.002)
-criterion = ContrastiveLoss().to(device)
-lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-margin_schedule = [min_margin + (max_margin - min_margin) * (epoch / (num_epochs - 1)) for epoch in range(num_epochs)]
 
-counter = []
-loss_history = []
-iteration_number = 0
+net = SiameseNetwork()
+criterion = ContrastiveLoss()
+optimizer = optim.Adam(net.parameters(), lr=0.0003)
 
-for epoch in range(num_epochs):
-
-    # Iterate over batches
-    for i, (img0, img1, label) in enumerate(train_dataloader, 0):
-
-        # Send the images and labels to device
-        img0, img1, label = img0.to(device), img1.to(device), label.to(device)
-
-        # Zero the gradients
-        optimizer.zero_grad()
-
-        # Pass in the two images into the network and obtain two outputs
-        output1, output2 = net(img0, img1)
-
-        # Pass the outputs of the networks and label into the loss function
-        loss_contrastive = criterion(output1, output2, label)
-
-        # Calculate the backpropagation
-        loss_contrastive.backward()
-
-        # Optimize
-        optimizer.step()
-        # lr_scheduler.step()
-
-        # # Adjust margin based on epoch
-        # criterion.margin = margin_schedule[epoch]
-
-        # Every 20 batches print out the loss
-        if i % 20 == 0:
-            print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
-            iteration_number += 10
-
-            counter.append(iteration_number)
-            loss_history.append(loss_contrastive.item())
-
-# plt.plot(loss_history, label="Loss")
-# plt.show()
-
-
+# counter = []
+# loss_history = []
+# iteration_number = 0
+#
+# net.train()
+# # Iterate through the epochs
+# for epoch in range(100):
+#
+#     # Iterate over batches
+#     for i, (img0, img1, label) in enumerate(train_dataloader, 0):
+#
+#         # Zero the gradients
+#         optimizer.zero_grad()
+#
+#         # Pass in the two images into the network and obtain two outputs
+#         output1, output2 = net(img0, img1)
+#
+#         # Pass the outputs of the networks and label into the loss function
+#         loss_contrastive = criterion(output1, output2, label)
+#
+#         # Calculate the backpropagation
+#         loss_contrastive.backward()
+#
+#         # Optimize
+#         optimizer.step()
+#
+#         # Every 10 batches print out the loss
+#         if i % 10 == 0:
+#             print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
+#             iteration_number += 10
+#
+#             counter.append(iteration_number)
+#             loss_history.append(loss_contrastive.item())
+#
+# show_plot(counter, loss_history)
+# #
+folder_dataset_test = datasets.ImageFolder(root="/Users/mac/research books/signature_research/data/faces/testing/")
 siamese_dataset1 = SiameseNetworkDataset(imageFolderDataset=folder_dataset_test,
-                                         transform=transformation)
+                                         transform=transformation_test)
 test_dataloader = DataLoader(siamese_dataset1, batch_size=1, shuffle=True)
+# #
+# torch.save(net.state_dict(), 'testSignal2.pt')
+# print("saved")
+my_siamese_model = SiameseNetwork()
+state_dict = torch.load('testSignal2.pt')
+my_siamese_model.load_state_dict(state_dict)
+my_siamese_model.eval()
 
 # Grab one image that we are going to test
-dataiter = iter(test_dataloader)
-x0, _, _ = next(dataiter)
+# dataiter = iter(test_dataloader)
+# x0, _, _ = next(dataiter)
+# my_siamese_model.eval()
+# for i in range(15):
+#     # Iterate over 5 images and test them with the first image (x0)
+#     _, x1, label2 = next(dataiter)
+#
+#     # Concatenate the two images together
+#     concatenated = torch.cat((x0, x1), 0)
+#
+#     output1, output2 = my_siamese_model(x0, x1)
+#     euclidean_distance = F.pairwise_distance(output1, output2)
+#     imshow(torchvision.utils.make_grid(concatenated), f'Dissimilarity: {euclidean_distance.item():.2f}')
 
-for i in range(10):
-    # Iterate over 5 images and test them with the first image (x0)
-    _, x1, label2 = next(dataiter)
+correct = 0
+total = 0
+y_true = []
+y_pred = []
+#
+with torch.no_grad():
+    for data in test_dataloader:
+        inputs1, inputs2, labels = data
+        outputs1, outputs2 = my_siamese_model(inputs1, inputs2)
+        _, predicted = torch.max(outputs1 - outputs2, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        # y_true += labels.cpu().numpy().tolist()
+        # y_pred += predicted.cpu().numpy().tolist()
 
-    # Concatenate the two images together
-    concatenated = torch.cat((x0, x1), 0)
-
-    output1, output2 = net(x0.to(device), x1.to(device))
-    euclidean_distance = F.pairwise_distance(output1, output2)
-    imshow(torchvision.utils.make_grid(concatenated), f'Dissimilarity: {euclidean_distance.item():.2f}')
-
-# x_value = torch.randn((1, 1, 100, 100))
-# res = cnn1(x_value)
-# batch_size = res.size(0)
-# flattened = res.view(batch_size, -1)
-# res_final = fc1(flattened)
-# flattened_size = 128 * 10 * 10
-# input_width = 96
-# input_height = 96
-# kernel_size = 3
-# stride = 2
-# output_width = floor((input_width - (kernel_size - 1) - 1) / stride + 1)
+print('Accuracy on the test set: %d %%' % (100 * correct / total))
+print(total)
 if __name__ == '__main__':
     print()
-    # print(res.shape)
-    # print(res_final.shape)
-    # print((96 - 2 - 1) / 2 + 1)
