@@ -118,7 +118,7 @@ class SiameseNetwork(nn.Module):
             nn.Dropout(p=0.4),
             nn.ReLU(inplace=True),
 
-            nn.Linear(1024, 128)
+            nn.Linear(1024, 256)
         )
 
     def forward_once(self, x):
@@ -156,10 +156,11 @@ folder_dataset = datasets.ImageFolder(root="/Users/mac/research books/signature_
 
 # Resize the images and transform to tensors
 transformation_train = transforms.Compose([transforms.Resize((100, 100)),
+                                           transforms.CenterCrop(100),
                                            transforms.RandomHorizontalFlip(),
                                            transforms.RandomVerticalFlip(),
                                            transforms.ToTensor(),
-                                           # transforms.Normalize(mean=[0.2062], std=[0.1148]),
+                                           transforms.Normalize(mean=[0.2062], std=[0.1148]),
                                            ])
 transformation_test = transforms.Compose([transforms.Resize((100, 100)),
                                           transforms.ToTensor()
@@ -177,6 +178,7 @@ train_dataloader = DataLoader(siamese_dataset, shuffle=True, batch_size=64)
 counter = []
 loss_history = []
 iteration_number = 0
+
 
 # siamese_net.train()
 # # Iterate through the epochs
@@ -210,9 +212,9 @@ iteration_number = 0
 #
 # show_plot(counter, loss_history)
 #
-# torch.save(siamese_net.state_dict(), "small_siamese_more_neurons.pt")
-
-
+# torch.save(siamese_net.state_dict(), "small_siamese_more_neurons+transforms.pt")
+#
+#
 def imshow(img, text=None):
     npimg = img.numpy()
     plt.axis("off")
@@ -226,7 +228,7 @@ def imshow(img, text=None):
 
 # load
 test_model = SiameseNetwork()
-state_dict = torch.load('small_siamese_more_neurons.pt')
+state_dict = torch.load('small_siamese_more_neurons+transforms.pt')
 test_model.load_state_dict(state_dict)
 test_model.eval()
 
@@ -234,21 +236,33 @@ test_model.eval()
 folder_dataset_test = datasets.ImageFolder(root="/Users/mac/research books/signature_research/data/faces/testing/")
 siamese_dataset1 = SiameseNetworkDataset(imageFolderDataset=folder_dataset_test,
                                          transform=transformation_test)
-test_dataloader = DataLoader(siamese_dataset1, batch_size=1, shuffle=True)
+test_dataloader = DataLoader(siamese_dataset1, batch_size=15, shuffle=True)
 
 # Grab one image that we are going to test
-dataiter = iter(test_dataloader)
-x0, _, _ = next(dataiter)
+# dataiter = iter(test_dataloader)
+# x0, _, _ = next(dataiter)
+#
+# for i in range(15):
+#     # Iterate over 5 images and test them with the first image (x0)
+#     _, x1, label2 = next(dataiter)
+#
+#     # Concatenate the two images together
+#     concatenated = torch.cat((x0, x1), 0)
+#
+#     output1, output2 = test_model(x0, x1)
+#     euclidean_distance = F.pairwise_distance(output1, output2)
+#     imshow(torchvision.utils.make_grid(concatenated), f'Dissimilarity: {euclidean_distance.item():.2f}')
+# Test the Siamese neural network
+correct = 0
+total = 0
+with torch.no_grad():
+    for data in test_dataloader:
+        inputs1, inputs2, labels = data
+        outputs1, outputs2 = test_model(inputs1, inputs2)
+        _, predicted = torch.max(outputs1 - outputs2, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
 
-for i in range(15):
-    # Iterate over 5 images and test them with the first image (x0)
-    _, x1, label2 = next(dataiter)
-
-    # Concatenate the two images together
-    concatenated = torch.cat((x0, x1), 0)
-
-    output1, output2 = test_model(x0, x1)
-    euclidean_distance = F.pairwise_distance(output1, output2)
-    imshow(torchvision.utils.make_grid(concatenated), f'Dissimilarity: {euclidean_distance.item():.2f}')
+print('Accuracy on the test set: %d %%' % (100 * correct / total))
 if __name__ == '__main__':
     print()

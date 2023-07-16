@@ -143,8 +143,8 @@ class SiameseNetwork(nn.Module):
             nn.Dropout(p=0.3),
 
             nn.Conv2d(256, 384, kernel_size=3, stride=1),
-            nn.MaxPool2d(2, stride=2),
             nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
             nn.Dropout(p=0.3),
 
             nn.Conv2d(384, 512, kernel_size=3, stride=1),
