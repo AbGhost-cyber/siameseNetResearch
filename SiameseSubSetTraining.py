@@ -46,7 +46,7 @@ def imshow(img, text=None):
 
 
 class ContrastiveLoss(torch.nn.Module):
-    def __init__(self, margin=3.0):
+    def __init__(self, margin=2.0):
         super(ContrastiveLoss, self).__init__()
         self.margin = margin
 
@@ -66,11 +66,11 @@ class SiameseMNIST(MNIST):
         self.transform = transforms.Compose([
             transforms.Resize(28),
             transforms.CenterCrop(28),
-            transforms.RandomVerticalFlip(),
-            transforms.RandomHorizontalFlip(),
-            ImageOps.invert,
+            # transforms.RandomVerticalFlip(),
+            # transforms.RandomHorizontalFlip(),
+            # ImageOps.invert,
             transforms.ToTensor(),
-            transforms.Normalize((0.3717,), (0.2831,))
+            # transforms.Normalize((0.3717,), (0.2831,))
         ])
 
     def __getitem__(self, index):
@@ -84,19 +84,19 @@ class SiameseNetwork(nn.Module):
     def __init__(self):
         super(SiameseNetwork, self).__init__()
         self.shared_conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1),
+            nn.Conv2d(1, 28, kernel_size=3, stride=1),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+
+            nn.Conv2d(28, 64, kernel_size=3, stride=2),
+            nn.ReLU()
         )
         self.fc = nn.Sequential(
-            nn.Linear(64 * 5 * 5, 128),
+            nn.Linear(64 * 6 * 6, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 256),
             nn.ReLU(),
-            nn.Linear(64, 10)
+            nn.Linear(256, 10)
         )
 
     def forward_once(self, x):
@@ -137,7 +137,7 @@ test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=True)
 # Define your stuff
 siamese_net = SiameseNetwork()
 loss_fn = ContrastiveLoss()
-optimizer = optim.Adam(siamese_net.parameters(), lr=0.001)
+optimizer = optim.Adam(siamese_net.parameters(), lr=0.002)
 
 counter = []
 loss_history = []
@@ -176,65 +176,36 @@ print_every = 50
 #             running_loss = 0.0
 #     print(f"Epoch {epoch + 1} complete")
 #
-# show_plot(counter, loss_history)
 #
 # torch.save(siamese_net.state_dict(), "siamese_subset.pt")
+# print("saved")
+#
+# show_plot(counter, loss_history)
 
 # load
 test_model = SiameseNetwork()
 state_dict = torch.load('siamese_subset.pt')
 test_model.load_state_dict(state_dict)
-test_model.eval()
 
 
-@torch.no_grad()
-def do_eval(log_interval=50):
-    running_loss = 0
-    number_samples = 0
+# test_model.eval()
 
-    distances = []
-    labels = []
-
-    for batch_idx, (x1, x2, y) in enumerate(test_dataloader):
-
-        x1, x2 = test_model(x1, x2)
-        loss = loss_fn(x1, x2, y)
-        distances.extend(torch.pairwise_distance(x1, x2, 2).cpu().tolist())
-        labels.extend(y.tolist())
-        number_samples += len(x1)
-        running_loss += loss.item() * len(x1)
-
-        if (batch_idx + 1) % log_interval == 0 or batch_idx == len(test_dataloader) - 1:
-            print('{}/{}: Loss: {:.4f}'.format(batch_idx + 1, len(test_dataloader), running_loss / number_samples))
-
-    # distances, y = zip(*distances)
-    # distances, y = torch.tensor(distances), torch.tensor(y)
-    distances = torch.tensor(distances)
-    y = torch.tensor(labels)
-    max_accuracy = accuracy(distances, y)
-    print(f'Max accuracy: {max_accuracy}')
-    return running_loss / number_samples, max_accuracy
+def validate(model, val_loader):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for img1, img2, label in val_loader:
+            output1, output2 = model(img1, img2)
+            dist = F.pairwise_distance(output1, output2)
+            pred = (dist < 0.5).long()
+            correct += (pred == label).sum().item()
+            total += label.size(0)
+    return correct / total
 
 
-losses = []
-accuracies = []
-for epoch in range(20):
-    print('Evaluating', '-' * 20)
-    loss, acc = do_eval()
-    losses.append(loss)
-    accuracies.append(acc)
-# Plotting loss
-plt.plot(range(len(losses)), losses)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Loss over Epochs')
-plt.show()
+acc = validate(test_model, test_dataloader)
+print(acc)
 
-# Plotting accuracy
-plt.plot(range(len(accuracies)), accuracies)
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.title('Accuracy over Epochs')
-plt.show()
 if __name__ == '__main__':
     print()
