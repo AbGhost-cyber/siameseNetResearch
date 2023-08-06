@@ -195,96 +195,126 @@ class TripletLoss(nn.Module):
         return loss
 
 
+# std = 0.20561213791370392
+# mean = 0.5613707900047302
+mean = 0.2062
+std = 0.1148
 transformation = transforms.Compose([transforms.Resize((120, 120)),
-                                     transforms.CenterCrop(100),
+                                     transforms.CenterCrop(120),
                                      ImageOps.invert,
                                      transforms.Grayscale(),
                                      # transforms.RandomHorizontalFlip(),
                                      # transforms.RandomVerticalFlip(),
-                                     transforms.ToTensor()
+                                     transforms.ToTensor(),
+                                     transforms.Normalize(mean=[mean], std=[std])
                                      ])
-transformation_test = transforms.Compose([transforms.Resize((100, 100)),
-                                          transforms.CenterCrop(100),
+transformation_test = transforms.Compose([transforms.Resize((120, 120)),
+                                          transforms.CenterCrop(120),
+                                          ImageOps.invert,
                                           transforms.Grayscale(),
-                                          transforms.ToTensor()
+                                          transforms.ToTensor(),
+                                          transforms.Normalize(mean=[mean], std=[std])
                                           ])
 custom_dataset = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/training/",
                                transform=transformation)
+# Load the training dataset
+train_dataloader = DataLoader(custom_dataset, shuffle=True, batch_size=64)
+
+# pixel_values = []
+#
+# for i in range(len(custom_dataset)):
+#     anchor_image, positive_image, negative_image = custom_dataset[i]
+#
+#     pixel_values.extend([anchor_image, positive_image, negative_image])
+#
+# pixel_values = torch.stack(pixel_values, dim=0)
+# mean = torch.mean(pixel_values, dim=(0, 2, 3))
+# std = torch.std(pixel_values, dim=(0, 2, 3))
+#
+# mean = mean.item()
+# std = std.item()
+#
+# print("std", std)
+# print("mean", mean)
 
 simple_branch = SimpleBranch()
 siamese_net = SiameseNetwork(branch=simple_branch)
 loss_fn = TripletLoss()
 optimizer = optim.Adam(siamese_net.parameters(), lr=0.0005)
-# Load the training dataset
-train_dataloader = DataLoader(custom_dataset, shuffle=True, batch_size=64)
+# optimizer = optim.RMSprop(siamese_net.parameters(), lr=1e-5, eps=1e-8, weight_decay=5e-4, momentum=0.5)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
 counter = []
 loss_history = []
 iteration_number = 0
 epoch = 20
-siamese_net.train()
-# Iterate through the epochs
-for epoch in range(epoch):
-
-    # Iterate over batches
-    for index, (anchor_image, positive_image, negative_image) in enumerate(train_dataloader, 0):
-
-        # Zero the gradients
-        optimizer.zero_grad()
-
-        anchor, positive, negative = siamese_net(anchor_image, positive_image, negative_image)
-
-        # Pass the outputs of the networks and label into the loss function
-        loss_contrastive = loss_fn(anchor, positive, negative)
-
-        # Calculate the backpropagation
-        loss_contrastive.backward()
-
-        # Optimize
-        optimizer.step()
-
-        # Every 10 batches print out the loss
-        if index % 10 == 0:
-            print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
-            iteration_number += 10
-
-            counter.append(iteration_number)
-            loss_history.append(loss_contrastive.item())
-
-plt.plot(counter, loss_history)
-plt.show()
-
-torch.save(siamese_net.state_dict(), "hard_positive+2.pt")
-
-# test_model = SiameseNetwork()
-# state_dict = torch.load('hard_positive+1.pt')
-# test_model.load_state_dict(state_dict)
-# test_model.eval()
+# siamese_net.train()
+# # Iterate through the epochs
+# for epoch in range(epoch):
 #
-# # Locate the test dataset and load it into the SiameseNetworkDataset
-# custom_dataset1 = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/testing/",
-#                                 transform=transformation_test)
-# test_dataloader = DataLoader(custom_dataset1, batch_size=1, shuffle=True)
+#     # Iterate over batches
+#     for index, (anchor_image, positive_image, negative_image) in enumerate(train_dataloader, 0):
 #
-# # Grab one image that we are going to test
-# dataiter = iter(test_dataloader)
-# anchor_image, _, _ = next(dataiter)
+#         # Zero the gradients
+#         optimizer.zero_grad()
 #
-# for i in range(15):
-#     # Iterate over 5 images and test them with the first image (x0)
-#     _, positive_image, negative_image = next(dataiter)
+#         anchor, positive, negative = siamese_net(anchor_image, positive_image, negative_image)
 #
-#     # Concatenate the two images together
-#     concatenated_positive = torch.cat((anchor_image, positive_image), 0)
-#     concatenated_negative = torch.cat((anchor_image, negative_image), 0)
+#         # Pass the outputs of the networks and label into the loss function
+#         loss_contrastive = loss_fn(anchor, positive, negative)
 #
-#     output_anchor, output_positive, output_negative = test_model(anchor_image, positive_image, negative_image)
-#     euclidean_distance_positive = torch.nn.functional.pairwise_distance(output_anchor, output_positive)
-#     euclidean_distance_negative = torch.nn.functional.pairwise_distance(output_anchor, output_negative)
-#     imshow(torchvision.utils.make_grid(concatenated_positive),
-#            f'Dissimilarity Anchor <-> Positive: {euclidean_distance_positive.item():.2f}')
-#     imshow(torchvision.utils.make_grid(concatenated_negative),
-#            f'Dissimilarity Anchor <-> Negative: {euclidean_distance_negative.item():.2f}')
+#         # Calculate the backpropagation
+#         loss_contrastive.backward()
+#
+#         # Optimize
+#         optimizer.step()
+#         scheduler.step(loss_contrastive)
+#         # scheduler.step()
+#
+#         # Every 10 batches print out the loss
+#         if index % 10 == 0:
+#             print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
+#             iteration_number += 10
+#
+#             counter.append(iteration_number)
+#             loss_history.append(loss_contrastive.item())
+#
+# plt.plot(counter, loss_history)
+# plt.show()
+#
+# torch.save(siamese_net.state_dict(), "hard_positive+3.pt")
+
+test_model = SiameseNetwork(branch=simple_branch)
+state_dict = torch.load('hard_positive+3.pt')
+test_model.load_state_dict(state_dict)
+test_model.eval()
+
+# Locate the test dataset and load it into the SiameseNetworkDataset
+custom_dataset1 = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/testing/",
+                                transform=transformation_test)
+test_dataloader = DataLoader(custom_dataset1, batch_size=1, shuffle=True)
+
+# Grab one image that we are going to test
+dataiter = iter(test_dataloader)
+anchor_image, _, _ = next(dataiter)
+
+for i in range(15):
+    # Iterate over 5 images and test them with the first image (x0)
+    _, positive_image, negative_image = next(dataiter)
+
+    # Concatenate the two images together
+    concatenated_positive = torch.cat((anchor_image, positive_image, negative_image), 0)
+    # concatenated_negative = torch.cat((anchor_image, negative_image), 0)
+
+    output_anchor, output_positive, output_negative = test_model(anchor_image, positive_image, negative_image)
+    euclidean_distance_positive = torch.nn.functional.pairwise_distance(output_anchor, output_positive)
+    euclidean_distance_negative = torch.nn.functional.pairwise_distance(output_anchor, output_negative)
+    imshow(torchvision.utils.make_grid(concatenated_positive),
+           f'Dissimilarity b/w Anchor and Positive: {euclidean_distance_positive.item():.2f}\n'
+           f'Dissimilarity b/w Anchor and Negative: {euclidean_distance_negative.item():.2f}'
+           )
+    # imshow(torchvision.utils.make_grid(concatenated_negative),
+    #        f'Dissimilarity Anchor <-> Negative: {euclidean_distance_negative.item():.2f}')
 
 if __name__ == '__main__':
     print()
