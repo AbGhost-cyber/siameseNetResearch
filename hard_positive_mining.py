@@ -203,17 +203,13 @@ transformation = transforms.Compose([transforms.Resize((120, 120)),
                                      transforms.CenterCrop(120),
                                      ImageOps.invert,
                                      transforms.Grayscale(),
-                                     # transforms.RandomHorizontalFlip(),
-                                     # transforms.RandomVerticalFlip(),
                                      transforms.ToTensor(),
                                      transforms.Normalize(mean=[mean], std=[std])
                                      ])
 transformation_test = transforms.Compose([transforms.Resize((120, 120)),
                                           transforms.CenterCrop(120),
-                                          ImageOps.invert,
                                           transforms.Grayscale(),
-                                          transforms.ToTensor(),
-                                          transforms.Normalize(mean=[mean], std=[std])
+                                          transforms.ToTensor()
                                           ])
 custom_dataset = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/training/",
                                transform=transformation)
@@ -241,7 +237,6 @@ simple_branch = SimpleBranch()
 siamese_net = SiameseNetwork(branch=simple_branch)
 loss_fn = TripletLoss()
 optimizer = optim.Adam(siamese_net.parameters(), lr=0.0005)
-# optimizer = optim.RMSprop(siamese_net.parameters(), lr=1e-5, eps=1e-8, weight_decay=5e-4, momentum=0.5)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
 counter = []
@@ -282,16 +277,16 @@ epoch = 20
 # plt.plot(counter, loss_history)
 # plt.show()
 #
-# torch.save(siamese_net.state_dict(), "hard_positive+3.pt")
+# torch.save(siamese_net.state_dict(), "hard_positive_simple_branch.pt")
 
 test_model = SiameseNetwork(branch=simple_branch)
-state_dict = torch.load('hard_positive+3.pt')
+state_dict = torch.load('hard_positive_simple_branch.pt')
 test_model.load_state_dict(state_dict)
 test_model.eval()
 
 # Locate the test dataset and load it into the SiameseNetworkDataset
 custom_dataset1 = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/testing/",
-                                transform=transformation_test)
+                                transform=transformation)
 test_dataloader = DataLoader(custom_dataset1, batch_size=1, shuffle=True)
 
 # Grab one image that we are going to test
@@ -304,7 +299,6 @@ for i in range(15):
 
     # Concatenate the two images together
     concatenated_positive = torch.cat((anchor_image, positive_image, negative_image), 0)
-    # concatenated_negative = torch.cat((anchor_image, negative_image), 0)
 
     output_anchor, output_positive, output_negative = test_model(anchor_image, positive_image, negative_image)
     euclidean_distance_positive = torch.nn.functional.pairwise_distance(output_anchor, output_positive)
@@ -313,8 +307,6 @@ for i in range(15):
            f'Dissimilarity b/w Anchor and Positive: {euclidean_distance_positive.item():.2f}\n'
            f'Dissimilarity b/w Anchor and Negative: {euclidean_distance_negative.item():.2f}'
            )
-    # imshow(torchvision.utils.make_grid(concatenated_negative),
-    #        f'Dissimilarity Anchor <-> Negative: {euclidean_distance_negative.item():.2f}')
 
 if __name__ == '__main__':
     print()
