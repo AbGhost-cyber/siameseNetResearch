@@ -232,12 +232,12 @@ class SignatureDataset2(Dataset):
 # organize_images_into_subfolders(original_signatures_root)
 # organize_images_into_subfolders(forg_signatures_root)
 # print("done")
-# std 0.20561213791370392
-# mean 0.5613707900047302
+std = 0.20561213791370392
+mean = 0.5613707900047302
 transformation = transforms.Compose([
     transforms.Resize((120, 120)),
     transforms.CenterCrop(120),
-    ImageOps.invert,
+    # ImageOps.invert,
     transforms.Grayscale(),
     transforms.ToTensor(),
     # transforms.Normalize(mean=[mean], std=[std])
@@ -249,11 +249,11 @@ forg_signatures_root = '/Users/mac/PycharmProjects/signetTest/data/CEDAR/full_ne
 train_dataset = SignatureDataset2(genuine_folder=original_signatures_root, forged_folder=forg_signatures_root,
                                   transform=transformation)
 # Load the training dataset
-train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=64)
+train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8)
 
-# example_batch = next(iter(train_dataloader))
-# concatenated = torch.cat((example_batch[0], example_batch[1], example_batch[2]), 0)
-# imshow(torchvision.utils.make_grid(concatenated))
+example_batch = next(iter(train_dataloader))
+concatenated = torch.cat((example_batch[0], example_batch[1], example_batch[2]), 0)
+imshow(torchvision.utils.make_grid(concatenated))
 
 # pixel_values = []
 #
