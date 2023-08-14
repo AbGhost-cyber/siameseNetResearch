@@ -225,3 +225,4 @@ for i in range(15):
     imshow(torchvision.utils.make_grid(concatenated), f'Dissimilarity: {euclidean_distance.item():.2f}')
 if __name__ == '__main__':
     print()
+

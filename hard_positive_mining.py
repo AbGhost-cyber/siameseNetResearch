@@ -15,6 +15,71 @@ import matplotlib.pyplot as plt
 from torchvision.transforms import RandomApply, RandomChoice, RandomRotation, RandomAffine
 
 
+def calculate_accuracy(threshold, model, dataloader):
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            anchor, positive, negative = batch
+
+            # Pass samples through the model to get embeddings
+            anchor_emb, positive_emb, negative_emb = model(anchor, positive, negative)
+
+            # Compute distances
+            dist_pos = torch.norm(anchor_emb - positive_emb, dim=1)
+            dist_neg = torch.norm(anchor_emb - negative_emb, dim=1)
+
+            # Rank triplets
+            sorted_indices = torch.argsort(dist_pos)
+            sorted_dist_neg = dist_neg[sorted_indices]
+
+            # Predict labels based on threshold
+            predicted_labels = sorted_dist_neg < threshold
+
+            # Update accuracy count
+            correct += torch.sum(predicted_labels).item()
+            total += len(predicted_labels)
+
+    accuracy = correct / total
+
+    return accuracy
+
+
+# calculates the false acceptance rate and false rejection rates
+def calculate_far_frr(threshold, model, dataloader):
+    false_acceptances = 0
+    false_rejections = 0
+    total_positives = 0
+    total_negatives = 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            anchor, positive, negative = batch
+
+            # Pass samples through the model to get embeddings
+            anchor_emb, positive_emb, negative_emb = model(anchor, positive, negative)
+
+            # Compute distances
+            dist_pos = torch.norm(anchor_emb - positive_emb, dim=1)
+            dist_neg = torch.norm(anchor_emb - negative_emb, dim=1)
+
+            # Compare distances with threshold
+            predicted_positives = dist_pos < threshold
+            predicted_negatives = dist_neg >= threshold
+
+            # Update counts
+            false_acceptances += torch.sum(predicted_negatives).item()
+            false_rejections += torch.sum(predicted_positives).item()
+            total_positives += len(predicted_positives)
+            total_negatives += len(predicted_negatives)
+
+    far = false_acceptances / total_negatives
+    frr = false_rejections / total_positives
+
+    return far, frr
+
+
 def imshow(img, text=None):
     npimg = img.numpy()
     plt.axis("off")
@@ -127,46 +192,121 @@ class CustomDataset(ImageFolder):
         return len(self.samples)
 
 
+def nin_block(out_channels, kernel_size, strides, padding):
+    return nn.Sequential(
+        nn.LazyConv2d(out_channels, kernel_size, strides, padding), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True))
+
+
+# class SimpleBranch(nn.Module):
+#
+#     def __init__(self):
+#         super(SimpleBranch, self).__init__()
+#
+#         self.net = nn.Sequential(
+#             nn.Conv2d(1, 96, kernel_size=11, stride=4),
+#             nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+#             nn.ReLU(inplace=True),
+#             nn.MaxPool2d(3, stride=2),
+#             nn.Dropout(p=0.2),
+#
+#             nin_block(out_channels=256, kernel_size=3, strides=1, padding=0),
+#             nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+#             nn.Dropout(p=0.2),
+#
+#             # nn.Conv2d(96, 256, kernel_size=5, stride=1),
+#             # nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+#             # nn.ReLU(inplace=True),
+#             # nn.MaxPool2d(2, stride=2),
+#             # nin_block(out_channels=256, kernel_size=3, strides=1, padding=0),
+#             # nn.Dropout(p=0.2),
+#             # nin_block(out_channels=384, kernel_size=3, strides=1, padding=0),
+#             # nn.Dropout(p=0.2),
+#
+#             # nn.Conv2d(256, 384, kernel_size=3, stride=1),
+#             # nn.ReLU(inplace=True),
+#             # nn.AdaptiveAvgPool2d((1, 1)),
+#
+#             nn.Flatten(1, -1),
+#
+#             nn.LazyLinear(512),
+#             nn.ReLU(inplace=True),
+#             nn.Dropout(p=0.3),
+#
+#             nn.Linear(512, 128),
+#             nn.ReLU(inplace=True),
+#             nn.Dropout(p=0.4),
+#         )
+#
+#     def forward(self, x):
+#         output = self.net(x)
+#         return output
+
 class SimpleBranch(nn.Module):
 
     def __init__(self):
         super(SimpleBranch, self).__init__()
-        self.cnn1 = nn.Sequential(
-            nn.Conv2d(1, 96, kernel_size=11, stride=4),
-            nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(3, stride=2),
-            nn.Dropout(p=0.3),
 
-            nn.Conv2d(96, 256, kernel_size=5, stride=1),
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=2, stride=1),
             nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, stride=2),
             nn.Dropout(p=0.3),
 
-            nn.Conv2d(256, 384, kernel_size=3, stride=1),
-            # α = 10−4,β = 0.75 k = 2, n = 5
+            nn.Conv2d(64, 128, kernel_size=5, stride=1),
             nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
             nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
         )
-
-        # Setting up the Fully Connected Layers
-        self.fc1 = nn.Sequential(
+        self.nin_block = nn.Sequential(
+            nin_block(out_channels=128, kernel_size=2, strides=1, padding=0),
+            nn.Dropout(p=0.3)
+        )
+        self.fc_layer = nn.Sequential(
             nn.LazyLinear(1024),
             nn.ReLU(inplace=True),
             nn.Dropout(p=0.4),
 
-            nn.Linear(1024, 256),
+            nn.LazyLinear(256),
             nn.ReLU(inplace=True),
             nn.Dropout(p=0.4),
 
-            nn.Linear(256, 2)
+            nn.LazyLinear(2)
         )
 
     def forward(self, x):
-        output = self.cnn1(x)
-        output = output.view(output.size()[0], -1)
-        output = self.fc1(output)
+        x = self.conv_layer(x)
+        x = self.nin_block(x)
+        x = torch.flatten(x, 1)
+        x = self.fc_layer(x)
+        return x
+
+
+class NinBranch(nn.Module):
+    def __init__(self):
+        super(NinBranch, self).__init__()
+        self.net = nn.Sequential(
+            nin_block(96, kernel_size=11, strides=4, padding=0),
+            nn.MaxPool2d(3, stride=2),
+            nn.Dropout(0.2),
+
+            nin_block(256, kernel_size=5, strides=1, padding=2),
+            nn.MaxPool2d(3, stride=2),
+            nn.Dropout(0.2),
+
+            nin_block(384, kernel_size=3, strides=1, padding=1),
+            nn.MaxPool2d(3, stride=2),
+            nn.Dropout(0.2),
+
+            nin_block(512, kernel_size=3, strides=1, padding=1),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten())
+
+    def forward(self, X):
+        output = self.net(X)
         return output
 
 
@@ -182,27 +322,52 @@ class SiameseNetwork(nn.Module):
 
         return anchor_features, positive_features, negative_features
 
+    def layer_summary(self, X_shape):
+        X = torch.randn(*X_shape)
+        # if self.branch.net is None:
+        #     print("branch has not net attribute")
+        # else:
+        #     for layer in self.branch.net:
+        #         X = layer(X)
+        #         print(layer.__class__.__name__, 'output shape:\t', X.shape)
+
+
+# data_f = (1, 1, 224, 224)
+# simple_branch = SimpleBranch()
+# nin_branch = NinBranch()
+# net = SiameseNetwork(branch=simple_branch)
+# net.layer_summary(data_f)
+# net.branch = nin_branch
+# print("...." * 30)
+# net.layer_summary(data_f)
+
 
 class TripletLoss(nn.Module):
     def __init__(self, margin=1.5):
         super(TripletLoss, self).__init__()
         self.margin = margin
 
-    def forward(self, anchor, positive, negative):
-        distance_positive = torch.nn.functional.pairwise_distance(anchor, positive, p=2)
-        distance_negative = torch.nn.functional.pairwise_distance(anchor, negative, p=2)
-        loss = torch.mean((distance_positive - distance_negative + self.margin).clamp(min=0))
-        return loss
+    # def forward(self, anchor_embedding, positive_embedding, negative_embedding):
+    #     distance_positive = torch.nn.functional.pairwise_distance(anchor_embedding, positive_embedding, p=2)
+    #     distance_negative = torch.nn.functional.pairwise_distance(anchor_embedding, negative_embedding, p=2)
+    #     loss = torch.relu(distance_positive - distance_negative + self.margin)
+    #     return loss.mean()
+    def forward(self, anchor_embedding, positive_embedding, negative_embedding):
+        distance_positive = torch.nn.functional.pairwise_distance(anchor_embedding, positive_embedding, p=2)
+        distance_negative = torch.nn.functional.pairwise_distance(anchor_embedding, negative_embedding, p=2)
+        loss = torch.clamp(distance_positive - distance_negative + self.margin, min=0.0)
+        return loss.mean()
 
 
 # std = 0.20561213791370392
 # mean = 0.5613707900047302
 mean = 0.2062
 std = 0.1148
-transformation = transforms.Compose([transforms.Resize((120, 120)),
-                                     transforms.CenterCrop(120),
-                                     ImageOps.invert,
+transformation = transforms.Compose([transforms.Resize((50, 50)),
+                                     transforms.CenterCrop(50),
+                                     # ImageOps.invert,
                                      transforms.Grayscale(),
+                                     transforms.RandomHorizontalFlip(),
                                      transforms.ToTensor(),
                                      transforms.Normalize(mean=[mean], std=[std])
                                      ])
@@ -243,53 +408,49 @@ class CustomRandomAffineWithTranslation(object):
 
 
 # Define the range of values for each component of the affine transformation
-rotation_range = (-10.0, 10.0)
-shear_range = (-0.3, 0.3)
-scale_range = (0.8, 1.2)
-total_image_width = 120
-total_image_height = 120
-translation_range = (-2 / total_image_width, 2 / total_image_height)
-translation_range_scaled = (
-    max(translation_range[0] + 1, 0),
-    min(translation_range[1] + 1, 1)
-)
-# Define the probability of including each component in the transformation
-component_prob = 0.5
-# Define the affine transform
+# rotation_range = (-10.0, 10.0)
+# shear_range = (-0.3, 0.3)
+# scale_range = (0.8, 1.2)
+# total_image_width = 120
+# total_image_height = 120
+# translation_range = (-2 / total_image_width, 2 / total_image_height)
+# translation_range_scaled = (
+#     max(translation_range[0] + 1, 0),
+#     min(translation_range[1] + 1, 1)
+# )
+# # Define the probability of including each component in the transformation
+# component_prob = 0.5
+# # Define the affine transform
+#
+# transform2 = [
+#     RandomRotation(rotation_range),
+#     RandomAffine(degrees=0, shear=shear_range),
+#     RandomAffine(degrees=0, scale=scale_range),
+#     RandomAffine(degrees=0, translate=translation_range_scaled)
+# ]
+#
+# p = [component_prob] * len(transform2)
+#
+# affine_transform = RandomApply([
+#     RandomChoice(transform2, p=p)
+# ])
 
-transform2 = [
-    RandomRotation(rotation_range),
-    RandomAffine(degrees=0, shear=shear_range),
-    RandomAffine(degrees=0, scale=scale_range),
-    RandomAffine(degrees=0, translate=translation_range_scaled)
-]
-
-p = [component_prob] * len(transform2)
-
-affine_transform = RandomApply([
-    RandomChoice(transform2, p=p)
-])
-
-transformation_two = transforms.Compose([transforms.Resize((120, 120)),
-                                         transforms.CenterCrop(120),
-                                         ImageOps.invert,
-                                         transforms.Grayscale(),
-                                         transforms.ToTensor(),
-                                         transforms.Normalize(mean=[mean], std=[std]),
-                                         affine_transform
-                                         ])
-test_transform = transforms.Compose([
-    transforms.Resize((120, 120)),
-    transforms.CenterCrop(120),
-    ImageOps.invert,
-    transforms.Grayscale(),
-    transforms.ToTensor(),
-    # transforms.Normalize(mean=[mean], std=[std])
-])
-custom_dataset = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/training/",
-                               transform=test_transform)
-# Load the training dataset
-train_dataloader = DataLoader(custom_dataset, shuffle=True, batch_size=64)
+# transformation_two = transforms.Compose([transforms.Resize((120, 120)),
+#                                          transforms.CenterCrop(120),
+#                                          ImageOps.invert,
+#                                          transforms.Grayscale(),
+#                                          transforms.ToTensor(),
+#                                          transforms.Normalize(mean=[mean], std=[std]),
+#                                          affine_transform
+#                                          ])
+# test_transform = transforms.Compose([
+#     transforms.Resize((120, 120)),
+#     transforms.CenterCrop(120),
+#     ImageOps.invert,
+#     transforms.Grayscale(),
+#     transforms.ToTensor(),
+#     # transforms.Normalize(mean=[mean], std=[std])
+# ])
 
 # pixel_values = []
 #
@@ -326,32 +487,39 @@ train_dataloader = DataLoader(custom_dataset, shuffle=True, batch_size=64)
 #
 # print("std", std)
 # print("mean", mean)
-pixel_values = []
+# pixel_values = []
 
-with torch.no_grad():
-    for i in range(len(custom_dataset)):
-        anchor_image, positive_image, negative_image = custom_dataset[i]
-
-        pixel_values.append(anchor_image)
-        pixel_values.append(positive_image)
-        pixel_values.append(negative_image)
-
-pixel_values = torch.stack(pixel_values, dim=0)
-mean = torch.mean(pixel_values, dim=(0, 2, 3))
-std = torch.std(pixel_values, dim=(0, 2, 3))
-
-mean = mean.item()
-std = std.item()
-
-print("std", std)
-print("mean", mean)
-# simple_branch = SimpleBranch()
-# siamese_net = SiameseNetwork(branch=simple_branch)
-# loss_fn = TripletLoss()
-# optimizer = optim.Adam(siamese_net.parameters(), lr=0.0005)
-# scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+# with torch.no_grad():
+#     for i in range(len(custom_dataset)):
+#         anchor_image, positive_image, negative_image = custom_dataset[i]
 #
-# # Create a simple dataloader just for simple visualization
+#         pixel_values.append(anchor_image)
+#         pixel_values.append(positive_image)
+#         pixel_values.append(negative_image)
+#
+# pixel_values = torch.stack(pixel_values, dim=0)
+# mean = torch.mean(pixel_values, dim=(0, 2, 3))
+# std = torch.std(pixel_values, dim=(0, 2, 3))
+#
+# mean = mean.item()
+# std = std.item()
+#
+# print("std", std)
+# print("mean", mean)
+# simple_branch = SimpleBranch()
+custom_dataset = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/training/",
+                               transform=transformation)
+# Load the training dataset
+train_dataloader = DataLoader(custom_dataset, shuffle=True, batch_size=64)
+siamese_net = SiameseNetwork(branch=SimpleBranch())
+loss_fn = TripletLoss()
+optimizer = optim.Adam(siamese_net.parameters(), lr=0.00003)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+print(f"dataset size: {len(custom_dataset)}")
+print(f"batch per epoch {len(custom_dataset) // 64}")
+siamese_net.layer_summary((1, 1, 224, 224))
+#
+# Create a simple dataloader just for simple visualization
 # vis_dataloader = DataLoader(custom_dataset,
 #                             shuffle=True,
 #                             batch_size=8)
@@ -368,54 +536,59 @@ print("mean", mean)
 counter = []
 loss_history = []
 iteration_number = 0
-epoch = 20
-# siamese_net.train()
-# # Iterate through the epochs
-# for epoch in range(epoch):
-#
-#     # Iterate over batches
-#     for index, (anchor_image, positive_image, negative_image) in enumerate(train_dataloader, 0):
-#
-#         # Zero the gradients
-#         optimizer.zero_grad()
-#
-#         anchor, positive, negative = siamese_net(anchor_image, positive_image, negative_image)
-#
-#         # Pass the outputs of the networks and label into the loss function
-#         loss_contrastive = loss_fn(anchor, positive, negative)
-#
-#         # Calculate the backpropagation
-#         loss_contrastive.backward()
-#
-#         # Optimize
-#         optimizer.step()
-#         scheduler.step(loss_contrastive)
-#         # scheduler.step()
-#
-#         # Every 10 batches print out the loss
-#         if index % 10 == 0:
-#             print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
-#             iteration_number += 10
-#
-#             counter.append(iteration_number)
-#             loss_history.append(loss_contrastive.item())
-#
-# plt.plot(counter, loss_history)
-# plt.show()
-#
-# torch.save(siamese_net.state_dict(), "hard_positive_simple_branch.pt")
+epoch = 100
+siamese_net.train()
+# Iterate through the epochs
+for epoch in range(epoch):
 
-# test_model = SiameseNetwork(branch=simple_branch)
-# state_dict = torch.load('hard_positive_simple_branch.pt')
+    # Iterate over batches
+    for index, (anchor_image, positive_image, negative_image) in enumerate(train_dataloader, 0):
+
+        # Zero the gradients
+        optimizer.zero_grad()
+
+        anchor, positive, negative = siamese_net(anchor_image, positive_image, negative_image)
+
+        # Pass the outputs of the networks and label into the loss function
+        loss_contrastive = loss_fn(anchor, positive, negative)
+
+        # Calculate the backpropagation
+        loss_contrastive.backward()
+
+        # Optimize
+        optimizer.step()
+        scheduler.step(loss_contrastive)
+        # scheduler.step()
+
+        # Every 10 batches print out the loss
+        if index % 10 == 0:
+            print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
+            iteration_number += 10
+
+            counter.append(iteration_number)
+            loss_history.append(loss_contrastive.item())
+
+plt.plot(counter, loss_history)
+plt.show()
+
+torch.save(siamese_net.state_dict(), "hard_positive_flip2.pt")
+
+# test_model = SiameseNetwork(branch=SimpleBranch())
+# state_dict = torch.load('hard_positive_flip2.pt')
 # test_model.load_state_dict(state_dict)
 # test_model.eval()
-#
+# #
+# #
 # # Locate the test dataset and load it into the SiameseNetworkDataset
 # custom_dataset1 = CustomDataset(root="/Users/mac/research books/signature_research/data/faces/testing/",
 #                                 transform=transformation)
 # test_dataloader = DataLoader(custom_dataset1, batch_size=1, shuffle=True)
+
+# model_accuracy = calculate_far_frr(threshold=0.3, model=test_model, dataloader=test_dataloader)
+# print(f"model accuracy: {model_accuracy}")
 #
-# # Grab one image that we are going to test
+# #
+# # # Grab one image that we are going to test
 # dataiter = iter(test_dataloader)
 # anchor_image, _, _ = next(dataiter)
 #
@@ -426,13 +599,20 @@ epoch = 20
 #     # Concatenate the two images together
 #     concatenated_positive = torch.cat((anchor_image, positive_image, negative_image), 0)
 #
-#     output_anchor, output_positive, output_negative = test_model(anchor_image, positive_image, negative_image)
+#     # # Apply transformation_test only for testing, not for visualization
+#     # anchor_image_test = transformation_test(anchor_image)
+#     # positive_image_test = transformation_test(positive_image)
+#     # negative_image_test = transformation_test(negative_image)
+#
+#     output_anchor, output_positive, output_negative = test_model(anchor_image, positive_image,
+#                                                                  negative_image)
 #     euclidean_distance_positive = torch.nn.functional.pairwise_distance(output_anchor, output_positive)
 #     euclidean_distance_negative = torch.nn.functional.pairwise_distance(output_anchor, output_negative)
 #     imshow(torchvision.utils.make_grid(concatenated_positive),
 #            f'Dissimilarity b/w Anchor and Positive: {euclidean_distance_positive.item():.2f}\n'
 #            f'Dissimilarity b/w Anchor and Negative: {euclidean_distance_negative.item():.2f}'
 #            )
+
 
 if __name__ == '__main__':
     print()

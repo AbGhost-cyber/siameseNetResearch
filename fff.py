@@ -14,27 +14,59 @@ import torch
 from torch import nn
 from torchvision.models import densenet121
 
-shared_conv = nn.Sequential(
-    nn.Conv2d(1, 28, kernel_size=3, stride=1),
-    nn.ReLU(),
-    nn.MaxPool2d(kernel_size=2, stride=2),
 
-    nn.Conv2d(28, 64, kernel_size=3, stride=2),
-    nn.ReLU()
-)
-fc = nn.Sequential(
-    nn.Linear(64 * 6 * 6, 128),
-    nn.ReLU(),
-    nn.Linear(128, 256),
-    nn.ReLU(),
-    nn.Linear(256, 2)
-)
+def nin_block(out_channels, kernel_size, strides, padding):
+    return nn.Sequential(
+        nn.LazyConv2d(out_channels, kernel_size, strides, padding), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True))
 
-xx = torch.randn((1, 1, 28, 28))
-res = shared_conv(xx)
-result = res.view(res.size(0), -1)
-output = fc(result)
-print(res.shape)
-print(output.shape)
+
+class SimpleBranch(nn.Module):
+
+    def __init__(self):
+        super(SimpleBranch, self).__init__()
+
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=2, stride=1),
+            nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
+
+            nn.Conv2d(64, 128, kernel_size=5, stride=1),
+            nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
+        )
+        self.nin_block = nn.Sequential(
+            nin_block(out_channels=128, kernel_size=2, strides=1, padding=0),
+            nn.Dropout(p=0.3)
+        )
+        self.fc_layer = nn.Sequential(
+            nn.LazyLinear(1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.4),
+
+            nn.LazyLinear(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.4),
+
+            nn.LazyLinear(2)
+        )
+
+    def forward(self, x):
+        x = self.conv_layer(x)
+        x = self.nin_block(x)
+        x = torch.flatten(x, 1)
+        x = self.fc_layer(x)
+        return x
+
+
+xx = torch.randn((1, 1, 40, 40))
+net = SimpleBranch()
+print(net(xx).shape)
+
 if __name__ == '__main__':
     print()

@@ -15,6 +15,7 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision.transforms import RandomApply, RandomChoice, RandomRotation, RandomAffine
+import torchvision.models as models
 
 
 def imshow(img, text=None):
@@ -232,28 +233,162 @@ class SignatureDataset2(Dataset):
 # organize_images_into_subfolders(original_signatures_root)
 # organize_images_into_subfolders(forg_signatures_root)
 # print("done")
+
 std = 0.20561213791370392
 mean = 0.5613707900047302
 transformation = transforms.Compose([
-    transforms.Resize((120, 120)),
-    transforms.CenterCrop(120),
-    # ImageOps.invert,
+    transforms.Resize((40, 40)),
+    transforms.CenterCrop(40),
     transforms.Grayscale(),
     transforms.ToTensor(),
-    # transforms.Normalize(mean=[mean], std=[std])
+    transforms.Normalize(mean=[mean], std=[std])
 ])
 
 original_signatures_root = '/Users/mac/PycharmProjects/signetTest/data/CEDAR/full_new_org'
 forg_signatures_root = '/Users/mac/PycharmProjects/signetTest/data/CEDAR/full_new_forg'
 
+
+def nin_block(out_channels, kernel_size, strides, padding):
+    return nn.Sequential(
+        nn.LazyConv2d(out_channels, kernel_size, strides, padding), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True),
+        nn.LazyConv2d(out_channels, kernel_size=1), nn.ReLU(inplace=True))
+
+
+class SimpleBranch(nn.Module):
+
+    def __init__(self):
+        super(SimpleBranch, self).__init__()
+
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=2, stride=1),
+            nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
+
+            nn.Conv2d(64, 128, kernel_size=5, stride=1),
+            nn.LocalResponseNorm(alpha=1e-4, beta=0.75, k=2, size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, stride=2),
+            nn.Dropout(p=0.3),
+        )
+        self.nin_block = nn.Sequential(
+            nin_block(out_channels=128, kernel_size=2, strides=1, padding=0),
+            nn.Dropout(p=0.3)
+        )
+        self.fc_layer = nn.Sequential(
+            nn.LazyLinear(1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.4),
+
+            nn.LazyLinear(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.4),
+
+            nn.LazyLinear(2)
+        )
+
+    def forward(self, x):
+        x = self.conv_layer(x)
+        x = self.nin_block(x)
+        x = torch.flatten(x, 1)
+        x = self.fc_layer(x)
+        return x
+
+
+class SiameseNetwork(nn.Module):
+    def __init__(self, branch):
+        super(SiameseNetwork, self).__init__()
+        self.branch = branch
+
+    def forward(self, anchor_img, positive_img, negative_img):
+        anchor_features = self.branch(anchor_img)
+        positive_features = self.branch(positive_img)
+        negative_features = self.branch(negative_img)
+
+        return anchor_features, positive_features, negative_features
+
+    def layer_summary(self, X_shape):
+        return X_shape
+        # X = torch.randn(*X_shape)
+        # if self.branch.net is None:
+        #     print("branch has not net attribute")
+        # else:
+        #     for layer in self.branch.net:
+        #         X = layer(X)
+        #         print(layer.__class__.__name__, 'output shape:\t', X.shape)
+
+
+class TripletLoss(nn.Module):
+    def __init__(self, margin=1):
+        super(TripletLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, anchor, positive, negative):
+        distance_positive = torch.nn.functional.pairwise_distance(anchor, positive, p=2)
+        distance_negative = torch.nn.functional.pairwise_distance(anchor, negative, p=2)
+        loss = torch.mean((distance_positive - distance_negative + self.margin).clamp(min=0))
+        return loss
+
+
 train_dataset = SignatureDataset2(genuine_folder=original_signatures_root, forged_folder=forg_signatures_root,
                                   transform=transformation)
 # Load the training dataset
-train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8)
+batch_size = 64
+train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=batch_size)
+simple_branch = SimpleBranch()
+siamese_net = SiameseNetwork(branch=simple_branch)
+siamese_net.layer_summary((1, 1, 40, 40))
+loss_fn = TripletLoss()
+optimizer = optim.Adam(siamese_net.parameters(), lr=0.00003)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
-example_batch = next(iter(train_dataloader))
-concatenated = torch.cat((example_batch[0], example_batch[1], example_batch[2]), 0)
-imshow(torchvision.utils.make_grid(concatenated))
+counter = []
+loss_history = []
+iteration_number = 0
+epoch = 30
+print(f"dataset size: {len(train_dataset)}")
+print(f"batch per epoch {len(train_dataset) // batch_size}")
+siamese_net.train()
+# Iterate through the epochs
+for epoch in range(epoch):
+
+    # Iterate over batches
+    for index, (anchor_image, positive_image, negative_image) in enumerate(train_dataloader, 0):
+
+        # Zero the gradients
+        optimizer.zero_grad()
+
+        anchor, positive, negative = siamese_net(anchor_image, positive_image, negative_image)
+
+        # Pass the outputs of the networks and label into the loss function
+        loss_contrastive = loss_fn(anchor, positive, negative)
+
+        # Calculate the backpropagation
+        loss_contrastive.backward()
+
+        # Optimize
+        optimizer.step()
+        scheduler.step(loss_contrastive)
+        # scheduler.step()
+
+        # Every 10 batches print out the loss
+        if (index + 1) % 10 == 0:
+            print(f"Epoch number {epoch}\n Current loss {loss_contrastive.item()}\n")
+            iteration_number += 10
+
+            counter.append(iteration_number)
+            loss_history.append(loss_contrastive.item())
+
+plt.plot(counter, loss_history)
+plt.show()
+
+torch.save(siamese_net.state_dict(), "triplet_sign.pt")
+
+# example_batch = next(iter(train_dataloader))
+# concatenated = torch.cat((example_batch[0], example_batch[1], example_batch[2]), 0)
+# imshow(torchvision.utils.make_grid(concatenated))
 
 # pixel_values = []
 #
