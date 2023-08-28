@@ -8,27 +8,26 @@ from torchvision import datasets, transforms
 
 # Define the custom attention module
 class AttentionModule(nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, hidden_size):
         super(AttentionModule, self).__init__()
-        self.attention = nn.Linear(input_size, hidden_size)
-        self.softmax = nn.Softmax(dim=1)
+
+        self.attention = nn.Sequential(
+            nn.LazyLinear(hidden_size),
+            nn.Softmax(dim=1)
+        )
+
+        # self.attention = nn.Linear(input_size, hidden_size)
+        # self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
-        attention_scores = self.attention(x)
-        attention_weights = self.softmax(attention_scores)
-
-        # Reshape x to match attention_weights size
-        x = x.view(x.size(0), -1, attention_weights.size(1))
-
-        attended_representation = torch.bmm(attention_weights.unsqueeze(1), x).squeeze(1)
-        return attended_representation
+        return self.attention(x)
 
 
 # Define the model
 class AttentionModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes):
+    def __init__(self, hidden_size, num_classes):
         super(AttentionModel, self).__init__()
-        self.attention_module = AttentionModule(input_size, hidden_size)
+        self.attention_module = AttentionModule(hidden_size)
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
@@ -59,7 +58,7 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Initialize the model
-model = AttentionModel(input_size, hidden_size, num_classes).to(device)
+model = AttentionModel(input_size, num_classes).to(device)
 
 # Loss function and optimizer
 criterion = nn.CrossEntropyLoss()
