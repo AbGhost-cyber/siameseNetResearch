@@ -4,21 +4,14 @@ from shutil import move
 import numpy as np
 import torch
 import torchvision
-from PIL import Image, ImageOps
-from sklearn.model_selection import train_test_split
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
-import math
 from torchvision.datasets import ImageFolder
 import torch.nn as nn
-import os
 from PIL import Image
 import matplotlib.pyplot as plt
-from torchvision.transforms import RandomApply, RandomChoice, RandomRotation, RandomAffine
 import torchvision.models as models
-
-from utils.image_metrics import calculate_accuracy, calculate_FAR_FRR
 
 
 def imshow(img, text=None):

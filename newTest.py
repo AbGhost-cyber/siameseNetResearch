@@ -287,3 +287,5 @@ print('Accuracy on the test set: %d %%' % (100 * correct / total))
 print(total)
 if __name__ == '__main__':
     print()
+
+
